@@ -1,0 +1,25 @@
+repos:
+  - repo: local                         # Hooks defined in this project, not pulled from a remote repo
+    hooks:
+      # ---- Linter: finds issues and auto-fixes them (includes import sorting) ----
+      - id: ruff-check                   # Unique identifier for this hook
+        name: Lint with ruff             # Human-readable label shown in pre-commit's output
+        entry: uv run ruff check --fix --exit-non-zero-on-fix
+                                         # Command pre-commit runs:
+                                         #   uv run          → run inside the project's uv environment
+                                         #   ruff check      → the linter
+                                         #   --fix           → automatically fix what it can
+                                         #   --exit-non-zero-on-fix → fail the hook when a fix is applied,
+                                         #                            so the run also fails in CI, not just locally
+        language: system                 # Use the command as-is from the system/uv env (don't let pre-commit build its own)
+        types_or: [python, pyi, jupyter] # Run on .py files, .pyi stubs, AND .ipynb notebooks
+        require_serial: true             # Don't run this hook in parallel with others (avoids fix/format conflicts)
+        stages: [pre-commit]             # Run at commit time (i.e. when you `git commit`)
+
+      # ---- Formatter: reformats code style (runs after the linter) ----
+      - id: ruff-format                  # Unique identifier for this hook
+        name: Format with ruff           # Human-readable label shown in pre-commit's output
+        entry: uv run ruff format        # Command: run `ruff format` inside the uv environment
+        language: system                 # Use the command as-is from the system/uv env
+        types_or: [python, pyi, jupyter] # Format .py files, .pyi stubs, AND .ipynb notebooks
+        stages: [pre-commit]             # Run at commit time
