@@ -18,6 +18,9 @@ classifiers = [
 
 dependencies = []
 
+[project.optional-dependencies]
+s3 = ["boto3>=1.34"]  # xpectral_utils.s3
+
 [project.urls]
 Homepage = "https://github.com/bayquant/xpectral-utils"
 
@@ -31,6 +34,7 @@ dev = [
     "pre-commit>=4.4.0", # git hook manager
     "pytest>=8.0.0", # test runner
     "ipykernel>=7.0.1", # jupyter notebook support
+    "boto3>=1.34", # tests for xpectral_utils.s3 (the s3 extra at runtime)
 ]
 
 [tool.hatch.build.targets.wheel]
