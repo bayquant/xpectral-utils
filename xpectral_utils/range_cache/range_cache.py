@@ -7,6 +7,7 @@
 # Standard library imports
 import datetime
 import json
+import time
 
 # Third-party imports
 
@@ -23,13 +24,12 @@ _RANGE_CACHE_PATH = "./xpectral_utils/range_cache/manifest.json"
 # -----------------------------------------------------------------------------
 
 
-def range_cache(
-    kind: str, symbol: str, start: datetime.date, end: datetime.date
-) -> dict:
+def range_cache(kind: str, symbol: str, start: int, end: int) -> dict:
+    """Cache lookup over ``[start, end)`` in UNIX nanoseconds (UTC)."""
 
     # Range is inclusive of start but not end to avoid overlap with next range.
     if start >= end:
-        raise ValueError("Start date must be less than end date.")
+        raise ValueError("Start must be less than end.")
 
     with open(_RANGE_CACHE_PATH) as f:
         manifest = json.load(f)
@@ -39,9 +39,9 @@ def range_cache(
         # fetch data from provider.
         segments.append(
             {
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-                "ts_event": datetime.datetime.now().isoformat(),
+                "start": start,
+                "end": end,
+                "ts_event": time.time_ns(),
                 "sha": "dummy_sha",
             }
         )
@@ -52,11 +52,11 @@ def range_cache(
 
     covered, uncovered = _split_coverage(segments, start, end)
     # fetch data from provider.
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    now = time.time_ns()
     segments.extend(
         {
-            "start": gap["start"].isoformat(),
-            "end": gap["end"].isoformat(),
+            "start": gap["start"],
+            "end": gap["end"],
             "ts_event": now,
             "sha": "dummy_sha",
         }
@@ -74,16 +74,15 @@ def range_cache(
 
 
 def _split_coverage(
-    segments: list[dict], start: datetime.date, end: datetime.date
+    segments: list[dict], start: int, end: int
 ) -> tuple[list[dict], list[dict]]:
-    """Split ``[start, end)`` into cached and missing date ranges."""
+    """Split ``[start, end)`` into cached and missing ranges."""
 
     segments = sorted(segments, key=lambda segment: segment["start"], reverse=False)
     cursor = start
     covered, uncovered = [], []
     for segment in segments:
-        segment_start = datetime.date.fromisoformat(segment["start"])
-        segment_end = datetime.date.fromisoformat(segment["end"])
+        segment_start, segment_end = segment["start"], segment["end"]
         if segment_end <= start:
             continue
         if segment_start >= end:
@@ -104,31 +103,32 @@ def _split_coverage(
 # 2. start or end date is equal to None
 
 if __name__ == "__main__":
-    print(
-        range_cache(
-            kind="bar",
-            symbol="aapl",
-            start=datetime.date(2026, 1, 20),
-            end=datetime.date(2026, 3, 10),
-        )
-    )
-    print(
-        range_cache(
-            kind="bar",
-            symbol="aapl",
-            start=datetime.date(2026, 2, 20),
-            end=datetime.date(2026, 3, 10),
-        )
-    )
-    range_cache(
-        kind="bar",
-        symbol="ibm",
-        start=datetime.date(2023, 1, 1),
-        end=datetime.date(2023, 1, 10),
-    )
-    range_cache(
-        kind="range",
-        symbol="ibm",
-        start=datetime.date(2023, 1, 1),
-        end=datetime.date(2023, 1, 10),
-    )
+
+    def ns(year: int, month: int, day: int) -> int:
+        """UTC midnight of a calendar date as UNIX nanoseconds."""
+        utc = datetime.timezone.utc
+        return int(datetime.datetime(year, month, day, tzinfo=utc).timestamp()) * 10**9
+
+    # Empty cache: everything is uncovered.
+    print(range_cache("bar", "aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
+    # Fully covered by the segment above.
+    print(range_cache("bar", "aapl", ns(2026, 2, 20), ns(2026, 3, 10)))
+    # Extends past the cached end: one gap on the right.
+    print(range_cache("bar", "aapl", ns(2026, 3, 1), ns(2026, 3, 20)))
+    # Extends before the cached start: one gap on the left.
+    print(range_cache("bar", "aapl", ns(2026, 1, 10), ns(2026, 1, 25)))
+    # Spans the whole cache: gaps on both sides.
+    print(range_cache("bar", "aapl", ns(2026, 1, 1), ns(2026, 4, 1)))
+    # Hole in the middle: two disjoint segments, then a request across both.
+    range_cache("bar", "ibm", ns(2023, 1, 1), ns(2023, 1, 10))
+    range_cache("bar", "ibm", ns(2023, 2, 1), ns(2023, 2, 10))
+    print(range_cache("bar", "ibm", ns(2023, 1, 5), ns(2023, 2, 5)))
+    # Same symbol under a different kind is cached independently.
+    print(range_cache("range", "ibm", ns(2023, 1, 1), ns(2023, 1, 10)))
+    # Adjacent request: end of cache equals start of request, so no overlap.
+    print(range_cache("range", "ibm", ns(2023, 1, 10), ns(2023, 1, 15)))
+    # Invalid: start >= end.
+    try:
+        range_cache("bar", "aapl", ns(2026, 3, 10), ns(2026, 3, 10))
+    except ValueError as error:
+        print("ValueError:", error)
