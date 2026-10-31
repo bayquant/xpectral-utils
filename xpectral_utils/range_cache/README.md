@@ -73,7 +73,7 @@ Two-level mapping, `kind` then `symbol`, to a list of segments:
                 "start": 1768867200000000000,
                 "end": 1773100800000000000,
                 "ts_event": 1761862800000000000,
-                "sha": "dummy_sha"
+                "path": "bar/aapl/1768867200000000000-1773100800000000000"
             }
         ]
     }
@@ -84,7 +84,9 @@ Two-level mapping, `kind` then `symbol`, to a list of segments:
 |---|---|
 | `start`, `end` | Half-open range `[start, end)` in UNIX nanoseconds (UTC). |
 | `ts_event` | Wall-clock time (ns) when the segment was recorded. |
-| `sha` | Content hash of the stored data for the segment. Currently the placeholder `"dummy_sha"`. |
+| `path` | Location of the segment's data file, relative to the cache root. One file per segment, named `{kind}/{symbol}/{start}-{end}`. No extension yet, since the file format is undecided. |
+
+A content hash (`sha`) may be added later for integrity checks or provider-revision detection.
 
 `kind` namespaces independent datasets (for example `"bar"` and `"range"`). The same symbol under two kinds is cached independently.
 
@@ -115,7 +117,7 @@ uncovered = [{"start": 5, "end": 10}, {"start": 20, "end": 25}]
 
 The cache is a work in progress. Things to know before relying on it:
 
-- **Fetch is a stub.** Uncovered gaps are recorded in the manifest as if they had been fetched (with `sha = "dummy_sha"`), but no provider call happens yet. Today a call marks the gaps as cached before any data exists.
+- **Fetch is a stub.** Uncovered gaps are recorded in the manifest as if they had been fetched, with a `path` that nothing writes to yet. No provider call happens, so today a call marks the gaps as cached before any data exists.
 - **No segment merging.** Adjacent or overlapping segments are appended as-is, never coalesced. Gaps are computed against the current segments so new ones never overlap existing ones, but the list grows with many small adjacent entries, and the sweep's disjointness assumption relies on that.
 - **No concurrency control.** The read-modify-write on the manifest is atomic only for the final replace. Two processes calling at once can both read the same state, and the last writer wins, losing the other's segments.
 - **Relative manifest path.** `_RANGE_CACHE_PATH` is relative to the current working directory, so the cache only works when run from the repository root.

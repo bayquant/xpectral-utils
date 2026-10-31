@@ -45,7 +45,7 @@ def range_cache(kind: str, symbol: str, start: int, end: int) -> dict:
             "start": gap["start"],
             "end": gap["end"],
             "ts_event": now,
-            "sha": "dummy_sha",
+            "path": f"{kind}/{symbol}/{gap['start']}-{gap['end']}",
         }
         for gap in uncovered
     )
@@ -112,6 +112,8 @@ def _write_manifest(manifest: dict) -> None:
 
 # TODO:
 # 1. Add logging to the range_cache function to log when a cache hit or miss occurs.
+# 2. Save paths support.
+# 3. Sha support.
 
 if __name__ == "__main__":
 
