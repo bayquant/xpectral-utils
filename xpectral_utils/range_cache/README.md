@@ -85,7 +85,7 @@ Two-level mapping, `kind` then `symbol`, to a list of segments:
 |---|---|
 | `start`, `end` | Half-open range `[start, end)` in UNIX nanoseconds (UTC). |
 | `ts_event` | Wall-clock time (ns) when the segment was recorded. |
-| `path` | Location of the segment's data file, relative to the cache root. One file per segment, named `{kind}/{symbol}/{start}-{end}.parquet`. Currently an empty parquet written with polars. |
+| `path` | Location of the segment's data file, relative to the cache root. One file per segment, named `{kind}/{symbol}/{start}-{end}.parquet`. Currently an empty parquet written with pyarrow. |
 
 A content hash (`sha`) may be added later for integrity checks or provider-revision detection.
 

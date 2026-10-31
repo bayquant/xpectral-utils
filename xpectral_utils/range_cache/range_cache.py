@@ -12,7 +12,8 @@ import tempfile
 import time
 
 # Third-party imports
-import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 # -----------------------------------------------------------------------------
 # Globals and constants
@@ -107,7 +108,7 @@ def _write_parquet(path: str) -> None:
 
     full_path = os.path.join(os.path.dirname(_RANGE_CACHE_PATH), path)
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    pl.DataFrame().write_parquet(full_path)
+    pq.write_table(pa.table({}), full_path)
 
 
 # Tests:
