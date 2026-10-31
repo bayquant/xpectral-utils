@@ -7,6 +7,8 @@
 # Standard library imports
 import datetime
 import json
+import os
+import tempfile
 import time
 
 # Third-party imports
@@ -47,8 +49,7 @@ def range_cache(kind: str, symbol: str, start: int, end: int) -> dict:
         )
         print("No range cache found for kind: {}, symbol: {}".format(kind, symbol))
 
-        with open(_RANGE_CACHE_PATH, "w") as f:
-            json.dump(manifest, f, indent=4, sort_keys=True)
+        _write_manifest(manifest)
 
     covered, uncovered = _split_coverage(segments, start, end)
     # fetch data from provider.
@@ -62,8 +63,7 @@ def range_cache(kind: str, symbol: str, start: int, end: int) -> dict:
         }
         for gap in uncovered
     )
-    with open(_RANGE_CACHE_PATH, "w") as f:
-        json.dump(manifest, f, indent=4, sort_keys=True)
+    _write_manifest(manifest)
 
     return covered, uncovered
 
@@ -71,6 +71,27 @@ def range_cache(kind: str, symbol: str, start: int, end: int) -> dict:
 # -----------------------------------------------------------------------------
 # Private API
 # -----------------------------------------------------------------------------
+
+
+def _write_manifest(manifest: dict) -> None:
+    """Atomically replace the manifest so readers never see a partial file.
+
+    The temp file must share a directory with the target for the rename to
+    be atomic.
+    """
+
+    fd, tmp_path = tempfile.mkstemp(
+        dir=os.path.dirname(_RANGE_CACHE_PATH), suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(manifest, f, indent=4, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, _RANGE_CACHE_PATH)
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
 
 
 def _split_coverage(
@@ -101,6 +122,7 @@ def _split_coverage(
 # Tests:
 # 1. start date is higher than end date
 # 2. start or end date is equal to None
+# 3. Add a test for merging segments in the manifest
 
 if __name__ == "__main__":
 
