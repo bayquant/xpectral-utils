@@ -12,6 +12,7 @@ import tempfile
 import time
 
 # Third-party imports
+import polars as pl
 
 # -----------------------------------------------------------------------------
 # Globals and constants
@@ -38,17 +39,13 @@ def range_cache(kind: str, symbol: str, start: int, end: int) -> dict:
 
     segments = manifest.setdefault(kind, {}).setdefault(symbol, [])
     covered, uncovered = _split_coverage(segments, start, end)
-    # fetch data from provider.
     now = time.time_ns()
-    segments.extend(
-        {
-            "start": gap["start"],
-            "end": gap["end"],
-            "ts_event": now,
-            "path": f"{kind}/{symbol}/{gap['start']}-{gap['end']}",
-        }
-        for gap in uncovered
-    )
+    for gap in uncovered:
+        path = f"{kind}/{symbol}/{gap['start']}-{gap['end']}.parquet"
+        _write_parquet(path)
+        segments.append(
+            {"start": gap["start"], "end": gap["end"], "path": path, "ts_event": now}
+        )
     _write_manifest(manifest)
 
     return covered, uncovered
@@ -103,6 +100,14 @@ def _write_manifest(manifest: dict) -> None:
     except BaseException:
         os.unlink(tmp_path)
         raise
+
+
+def _write_parquet(path: str) -> None:
+    """Write an empty parquet file at ``path``, relative to the cache root."""
+
+    full_path = os.path.join(os.path.dirname(_RANGE_CACHE_PATH), path)
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    pl.DataFrame().write_parquet(full_path)
 
 
 # Tests:

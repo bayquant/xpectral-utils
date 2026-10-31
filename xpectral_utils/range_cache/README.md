@@ -60,6 +60,7 @@ range_cache()
 |---|---|
 | `range_cache.py` | Public `range_cache` function and private helpers. |
 | `manifest.json` | The index. Created and rewritten by the cache. |
+| `{kind}/{symbol}/*.parquet` | Segment data files, created next to the manifest. |
 
 ### Manifest schema
 
@@ -73,7 +74,7 @@ Two-level mapping, `kind` then `symbol`, to a list of segments:
                 "start": 1768867200000000000,
                 "end": 1773100800000000000,
                 "ts_event": 1761862800000000000,
-                "path": "bar/aapl/1768867200000000000-1773100800000000000"
+                "path": "bar/aapl/1768867200000000000-1773100800000000000.parquet"
             }
         ]
     }
@@ -84,7 +85,7 @@ Two-level mapping, `kind` then `symbol`, to a list of segments:
 |---|---|
 | `start`, `end` | Half-open range `[start, end)` in UNIX nanoseconds (UTC). |
 | `ts_event` | Wall-clock time (ns) when the segment was recorded. |
-| `path` | Location of the segment's data file, relative to the cache root. One file per segment, named `{kind}/{symbol}/{start}-{end}`. No extension yet, since the file format is undecided. |
+| `path` | Location of the segment's data file, relative to the cache root. One file per segment, named `{kind}/{symbol}/{start}-{end}.parquet`. Currently an empty parquet written with polars. |
 
 A content hash (`sha`) may be added later for integrity checks or provider-revision detection.
 
@@ -117,7 +118,7 @@ uncovered = [{"start": 5, "end": 10}, {"start": 20, "end": 25}]
 
 The cache is a work in progress. Things to know before relying on it:
 
-- **Fetch is a stub.** Uncovered gaps are recorded in the manifest as if they had been fetched, with a `path` that nothing writes to yet. No provider call happens, so today a call marks the gaps as cached before any data exists.
+- **Fetch is a stub.** Uncovered gaps are recorded in the manifest as if they had been fetched, with an empty parquet file at `path`. No provider call happens, so the files hold no data yet.
 - **No segment merging.** Adjacent or overlapping segments are appended as-is, never coalesced. Gaps are computed against the current segments so new ones never overlap existing ones, but the list grows with many small adjacent entries, and the sweep's disjointness assumption relies on that.
 - **No concurrency control.** The read-modify-write on the manifest is atomic only for the final replace. Two processes calling at once can both read the same state, and the last writer wins, losing the other's segments.
 - **Relative manifest path.** `_RANGE_CACHE_PATH` is relative to the current working directory, so the cache only works when run from the repository root.
