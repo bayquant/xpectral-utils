@@ -15,6 +15,11 @@ import time
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+# First-party imports
+from xpectral_utils.range_cache.exceptions import (
+    InvalidRangeError,  # goes agains rules for relative imports
+)
+
 # -----------------------------------------------------------------------------
 # Globals and constants
 # -----------------------------------------------------------------------------
@@ -33,7 +38,7 @@ def range_cache(kind: str, symbol: str, start: int, end: int) -> dict:
 
     # Range is inclusive of start but not end to avoid overlap with next range.
     if start >= end:
-        raise ValueError("Start must be less than end.")
+        raise InvalidRangeError("Start must be less than end.")
 
     with open(_RANGE_CACHE_PATH) as f:
         manifest = json.load(f)
@@ -120,6 +125,7 @@ def _write_parquet(path: str) -> None:
 # 1. Add logging to the range_cache function to log when a cache hit or miss occurs.
 # 2. Save paths support.
 # 3. Sha support.
+# 4. Check what happens when I request a single date.
 
 if __name__ == "__main__":
 
@@ -149,5 +155,5 @@ if __name__ == "__main__":
     # Invalid: start >= end.
     try:
         range_cache("bar", "aapl", ns(2026, 3, 10), ns(2026, 3, 10))
-    except ValueError as error:
-        print("ValueError:", error)
+    except InvalidRangeError as error:
+        print("InvalidRangeError:", error)
