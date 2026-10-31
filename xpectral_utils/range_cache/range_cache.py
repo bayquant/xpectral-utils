@@ -37,20 +37,6 @@ def range_cache(kind: str, symbol: str, start: int, end: int) -> dict:
         manifest = json.load(f)
 
     segments = manifest.setdefault(kind, {}).setdefault(symbol, [])
-    if not segments:
-        # fetch data from provider.
-        segments.append(
-            {
-                "start": start,
-                "end": end,
-                "ts_event": time.time_ns(),
-                "sha": "dummy_sha",
-            }
-        )
-        print("No range cache found for kind: {}, symbol: {}".format(kind, symbol))
-
-        _write_manifest(manifest)
-
     covered, uncovered = _split_coverage(segments, start, end)
     # fetch data from provider.
     now = time.time_ns()
