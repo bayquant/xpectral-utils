@@ -6,10 +6,14 @@
 
 # Standard library imports
 import datetime
+import functools
+import inspect
 import json
 import os
 import tempfile
 import time
+from collections.abc import Callable
+from collections.abc import Sequence
 
 # Third-party imports
 import pyarrow as pa
@@ -26,40 +30,85 @@ from xpectral_utils.range_cache.exceptions import (
 
 __all__ = ["range_cache"]
 
-_RANGE_CACHE_PATH = "./xpectral_utils/range_cache/manifest.json"
+_RANGE_CACHE_DIR = "./xpectral_utils/range_cache"
 
 # -----------------------------------------------------------------------------
 # General API
 # -----------------------------------------------------------------------------
 
 
-def range_cache(kind: str, symbol: str, start: int, end: int) -> dict:
-    """Cache lookup over ``[start, end)`` in UNIX nanoseconds (UTC)."""
+def range_cache(start: str, end: str, key: Sequence[str]) -> Callable:
+    """Decorate a function with an on-disk range cache.
 
-    # Range is inclusive of start but not end to avoid overlap with next range.
-    if start >= end:
-        raise InvalidRangeError("Start must be less than end.")
+    ``start`` and ``end`` name the parameters holding the range bounds in UNIX
+    nanoseconds (UTC), and ``key`` names the parameters whose values form the
+    manifest tree, in order. Each decorated function gets its own directory and
+    manifest, so different functions never collide.
+    """
 
-    with open(_RANGE_CACHE_PATH) as f:
-        manifest = json.load(f)
-
-    segments = manifest.setdefault(kind, {}).setdefault(symbol, [])
-    covered, uncovered = _split_coverage(segments, start, end)
-    now = time.time_ns()
-    for gap in uncovered:
-        path = f"{kind}/{symbol}/{gap['start']}-{gap['end']}.parquet"
-        _write_parquet(path)
-        segments.append(
-            {"start": gap["start"], "end": gap["end"], "path": path, "ts_event": now}
+    def decorator(func: Callable) -> Callable:
+        signature = inspect.signature(func)
+        for name in (start, end, *key):
+            if name not in signature.parameters:
+                raise TypeError(f"{func.__qualname__} has no parameter {name!r}.")
+        func_dir = os.path.join(
+            _RANGE_CACHE_DIR, f"{func.__module__}.{func.__qualname__}"
         )
-    _write_manifest(manifest)
 
-    return covered, uncovered
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            bound = signature.bind(*args, **kwargs)
+            bound.apply_defaults()
+            values = bound.arguments
+            return _lookup(
+                func_dir,
+                [str(values[name]) for name in key],
+                values[start],
+                values[end],
+            )
+
+        return wrapper
+
+    return decorator
 
 
 # -----------------------------------------------------------------------------
 # Private API
 # -----------------------------------------------------------------------------
+
+
+def _lookup(
+    func_dir: str, key_values: list[str], start: int, end: int
+) -> tuple[list[dict], list[dict]]:
+    """Cache lookup over ``[start, end)``, recording the gaps as new segments."""
+
+    # Range is inclusive of start but not end to avoid overlap with next range.
+    if start >= end:
+        raise InvalidRangeError("Start must be less than end.")
+
+    manifest_path = os.path.join(func_dir, "manifest.json")
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except FileNotFoundError:
+        manifest = {}
+
+    node = manifest
+    for value in key_values[:-1]:
+        node = node.setdefault(value, {})
+    segments = node.setdefault(key_values[-1], [])
+
+    covered, uncovered = _split_coverage(segments, start, end)
+    now = time.time_ns()
+    for gap in uncovered:
+        path = os.path.join(*key_values, f"{gap['start']}-{gap['end']}.parquet")
+        _write_parquet(func_dir, path)
+        segments.append(
+            {"start": gap["start"], "end": gap["end"], "path": path, "ts_event": now}
+        )
+    _write_manifest(manifest_path, manifest)
+
+    return covered, uncovered
 
 
 def _split_coverage(
@@ -87,31 +136,31 @@ def _split_coverage(
     return covered, uncovered
 
 
-def _write_manifest(manifest: dict) -> None:
+def _write_manifest(manifest_path: str, manifest: dict) -> None:
     """Atomically replace the manifest so readers never see a partial file.
 
     The temp file must share a directory with the target for the rename to
     be atomic.
     """
 
-    fd, tmp_path = tempfile.mkstemp(
-        dir=os.path.dirname(_RANGE_CACHE_PATH), suffix=".tmp"
-    )
+    manifest_dir = os.path.dirname(manifest_path)
+    os.makedirs(manifest_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=manifest_dir, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(manifest, f, indent=4, sort_keys=True)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, _RANGE_CACHE_PATH)
+        os.replace(tmp_path, manifest_path)
     except BaseException:
         os.unlink(tmp_path)
         raise
 
 
-def _write_parquet(path: str) -> None:
-    """Write an empty parquet file at ``path``, relative to the cache root."""
+def _write_parquet(func_dir: str, path: str) -> None:
+    """Write an empty parquet file at ``path``, relative to ``func_dir``."""
 
-    full_path = os.path.join(os.path.dirname(_RANGE_CACHE_PATH), path)
+    full_path = os.path.join(func_dir, path)
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
     pq.write_table(pa.table({}), full_path)
 
@@ -134,26 +183,24 @@ if __name__ == "__main__":
         utc = datetime.timezone.utc
         return int(datetime.datetime(year, month, day, tzinfo=utc).timestamp()) * 10**9
 
+    @range_cache(start="start", end="end", key=["kind", "symbol"])
+    def fetch(kind: str, symbol: str, start: int, end: int): ...
+
+    @range_cache(start="start", end="end", key=["symbol"])
+    def fetch_other(symbol: str, start: int, end: int): ...
+
     # Empty cache: everything is uncovered.
-    print(range_cache("bar", "aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
+    print(fetch("bar", "aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
     # Fully covered by the segment above.
-    print(range_cache("bar", "aapl", ns(2026, 2, 20), ns(2026, 3, 10)))
-    # Extends past the cached end: one gap on the right.
-    print(range_cache("bar", "aapl", ns(2026, 3, 1), ns(2026, 3, 20)))
-    # Extends before the cached start: one gap on the left.
-    print(range_cache("bar", "aapl", ns(2026, 1, 10), ns(2026, 1, 25)))
+    print(fetch("bar", "aapl", ns(2026, 2, 20), ns(2026, 3, 10)))
     # Spans the whole cache: gaps on both sides.
-    print(range_cache("bar", "aapl", ns(2026, 1, 1), ns(2026, 4, 1)))
-    # Hole in the middle: two disjoint segments, then a request across both.
-    range_cache("bar", "ibm", ns(2023, 1, 1), ns(2023, 1, 10))
-    range_cache("bar", "ibm", ns(2023, 2, 1), ns(2023, 2, 10))
-    print(range_cache("bar", "ibm", ns(2023, 1, 5), ns(2023, 2, 5)))
+    print(fetch("bar", "aapl", ns(2026, 1, 1), ns(2026, 4, 1)))
     # Same symbol under a different kind is cached independently.
-    print(range_cache("range", "ibm", ns(2023, 1, 1), ns(2023, 1, 10)))
-    # Adjacent request: end of cache equals start of request, so no overlap.
-    print(range_cache("range", "ibm", ns(2023, 1, 10), ns(2023, 1, 15)))
+    print(fetch("range", "aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
+    # A different function has its own manifest, so nothing is cached yet.
+    print(fetch_other("aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
     # Invalid: start >= end.
     try:
-        range_cache("bar", "aapl", ns(2026, 3, 10), ns(2026, 3, 10))
+        fetch("bar", "aapl", ns(2026, 3, 10), ns(2026, 3, 10))
     except InvalidRangeError as error:
         print("InvalidRangeError:", error)
