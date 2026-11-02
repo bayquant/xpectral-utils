@@ -54,18 +54,45 @@ def range_cache(start: str, end: str, key: Sequence[str]) -> Callable:
         func_dir = os.path.join(
             _RANGE_CACHE_DIR, f"{func.__module__}.{func.__qualname__}"
         )
+        manifest_path = os.path.join(func_dir, "manifest.json")
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             bound = signature.bind(*args, **kwargs)
             bound.apply_defaults()
-            values = bound.arguments
-            return _lookup(
-                func_dir,
-                [str(values[name]) for name in key],
-                values[start],
-                values[end],
-            )
+            arguments = bound.arguments
+
+            key_values = [str(arguments[name]) for name in key]
+            _start, _end = arguments[start], arguments[end]
+
+            if _start >= _end:
+                raise InvalidRangeError("Start must be less than end.")
+
+            manifest = _read_manifest(manifest_path)
+
+            tree = manifest
+            for part in key_values[:-1]:
+                tree = tree.setdefault(part, {})
+            segments = tree.setdefault(key_values[-1], [])
+
+            covered, uncovered = _split_coverage(segments, _start, _end)
+            ts_event = time.time_ns()
+            for gap in uncovered:
+                segment_path = os.path.join(
+                    *key_values, f"{gap['start']}-{gap['end']}.parquet"
+                )
+                _write_parquet(func_dir, segment_path)
+                segments.append(
+                    {
+                        "start": gap["start"],
+                        "end": gap["end"],
+                        "path": segment_path,
+                        "ts_event": ts_event,
+                    }
+                )
+            _write_manifest(manifest_path, manifest)
+
+            return covered, uncovered
 
         return wrapper
 
@@ -75,40 +102,6 @@ def range_cache(start: str, end: str, key: Sequence[str]) -> Callable:
 # -----------------------------------------------------------------------------
 # Private API
 # -----------------------------------------------------------------------------
-
-
-def _lookup(
-    func_dir: str, key_values: list[str], start: int, end: int
-) -> tuple[list[dict], list[dict]]:
-    """Cache lookup over ``[start, end)``, recording the gaps as new segments."""
-
-    # Range is inclusive of start but not end to avoid overlap with next range.
-    if start >= end:
-        raise InvalidRangeError("Start must be less than end.")
-
-    manifest_path = os.path.join(func_dir, "manifest.json")
-    try:
-        with open(manifest_path) as f:
-            manifest = json.load(f)
-    except FileNotFoundError:
-        manifest = {}
-
-    node = manifest
-    for value in key_values[:-1]:
-        node = node.setdefault(value, {})
-    segments = node.setdefault(key_values[-1], [])
-
-    covered, uncovered = _split_coverage(segments, start, end)
-    now = time.time_ns()
-    for gap in uncovered:
-        path = os.path.join(*key_values, f"{gap['start']}-{gap['end']}.parquet")
-        _write_parquet(func_dir, path)
-        segments.append(
-            {"start": gap["start"], "end": gap["end"], "path": path, "ts_event": now}
-        )
-    _write_manifest(manifest_path, manifest)
-
-    return covered, uncovered
 
 
 def _split_coverage(
@@ -136,6 +129,16 @@ def _split_coverage(
     return covered, uncovered
 
 
+def _read_manifest(manifest_path: str) -> dict:
+    """Load the manifest, or an empty one if it does not exist yet."""
+
+    try:
+        with open(manifest_path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
 def _write_manifest(manifest_path: str, manifest: dict) -> None:
     """Atomically replace the manifest so readers never see a partial file.
 
@@ -157,10 +160,10 @@ def _write_manifest(manifest_path: str, manifest: dict) -> None:
         raise
 
 
-def _write_parquet(func_dir: str, path: str) -> None:
-    """Write an empty parquet file at ``path``, relative to ``func_dir``."""
+def _write_parquet(func_dir: str, segment_path: str) -> None:
+    """Write an empty parquet file at ``segment_path``, relative to ``func_dir``."""
 
-    full_path = os.path.join(func_dir, path)
+    full_path = os.path.join(func_dir, segment_path)
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
     pq.write_table(pa.table({}), full_path)
 
