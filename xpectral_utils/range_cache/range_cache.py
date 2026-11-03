@@ -37,18 +37,20 @@ _RANGE_CACHE_DIR = "./xpectral_utils/range_cache"
 # -----------------------------------------------------------------------------
 
 
-def range_cache(start: str, end: str, key: Sequence[str]) -> Callable:
-    """Decorate a function with an on-disk range cache.
+def range_cache(
+    start_param: str, end_param: str, key_params: Sequence[str]
+) -> Callable:
+    """Decorator factory: build a decorator adding an on-disk range cache.
 
-    ``start`` and ``end`` name the parameters holding the range bounds in UNIX
-    nanoseconds (UTC), and ``key`` names the parameters whose values form the
-    manifest tree, in order. Each decorated function gets its own directory and
-    manifest, so different functions never collide.
+    ``start_param`` and ``end_param`` name the parameters holding the range
+    bounds in UNIX nanoseconds (UTC), and ``key_params`` names the parameters
+    whose values form the manifest tree, in order. Each decorated function gets
+    its own directory and manifest, so different functions never collide.
     """
 
     def decorator(func: Callable) -> Callable:
         signature = inspect.signature(func)
-        for name in (start, end, *key):
+        for name in (start_param, end_param, *key_params):
             if name not in signature.parameters:
                 raise TypeError(f"{func.__qualname__} has no parameter {name!r}.")
         func_dir = os.path.join(
@@ -62,10 +64,10 @@ def range_cache(start: str, end: str, key: Sequence[str]) -> Callable:
             bound.apply_defaults()
             arguments = bound.arguments
 
-            key_values = [str(arguments[name]) for name in key]
-            _start, _end = arguments[start], arguments[end]
+            key_values = [str(arguments[name]) for name in key_params]
+            start, end = arguments[start_param], arguments[end_param]
 
-            if _start >= _end:
+            if start >= end:
                 raise InvalidRangeError("Start must be less than end.")
 
             manifest = _read_manifest(manifest_path)
@@ -75,7 +77,7 @@ def range_cache(start: str, end: str, key: Sequence[str]) -> Callable:
                 tree = tree.setdefault(part, {})
             segments = tree.setdefault(key_values[-1], [])
 
-            covered, uncovered = _split_coverage(segments, _start, _end)
+            covered, uncovered = _split_coverage(segments, start, end)
             ts_event = time.time_ns()
             for gap in uncovered:
                 segment_path = os.path.join(
@@ -186,10 +188,10 @@ if __name__ == "__main__":
         utc = datetime.timezone.utc
         return int(datetime.datetime(year, month, day, tzinfo=utc).timestamp()) * 10**9
 
-    @range_cache(start="start", end="end", key=["kind", "symbol"])
+    @range_cache(start_param="start", end_param="end", key_params=["kind", "symbol"])
     def fetch(kind: str, symbol: str, start: int, end: int): ...
 
-    @range_cache(start="start", end="end", key=["symbol"])
+    @range_cache(start_param="start", end_param="end", key_params=["symbol"])
     def fetch_other(symbol: str, start: int, end: int): ...
 
     # Empty cache: everything is uncovered.
