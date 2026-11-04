@@ -77,32 +77,36 @@ def range_cache(
                 tree = tree.setdefault(part, {})
             segments = tree.setdefault(key_values[-1], [])
 
-            covered, uncovered = _split_coverage(segments, start, end)
-
-            # get cached data
+            pieces = _split_range(segments, start, end)
 
             ts_event = time.time_ns()
-            for gap in uncovered:
+            updated = False
+            for piece in pieces:
+                if piece["path"] is not None:
+                    # get cached data
+                    continue
+
                 # fetch new data
 
                 # convert to the standard format
 
                 segment_path = os.path.join(
-                    *key_values, f"{gap['start']}-{gap['end']}.parquet"
+                    *key_values, f"{piece['start']}-{piece['end']}.parquet"
                 )
                 _write_parquet(func_dir, segment_path)
                 segments.append(
                     {
-                        "start": gap["start"],
-                        "end": gap["end"],
+                        "start": piece["start"],
+                        "end": piece["end"],
                         "path": segment_path,
                         "ts_event": ts_event,
                     }
                 )
+                updated = True
 
             # Save before combining: combining can fail, and the fetched
             # segments are already on disk. Skip when nothing was added.
-            if uncovered:
+            if updated:
                 _write_manifest(manifest_path, manifest)
 
             # combine data, then trim to [start, end) since cached segments
@@ -120,14 +124,16 @@ def range_cache(
 # -----------------------------------------------------------------------------
 
 
-def _split_coverage(
-    segments: list[dict], start: int, end: int
-) -> tuple[list[dict], list[dict]]:
-    """Split ``[start, end)`` into cached and missing ranges."""
+def _split_range(segments: list[dict], start: int, end: int) -> list[dict]:
+    """Tile ``[start, end)`` with ordered cached and missing pieces.
+
+    A cached piece carries the ``path`` of its segment; a missing piece has
+    ``path`` set to ``None``.
+    """
 
     segments = sorted(segments, key=lambda segment: segment["start"], reverse=False)
     cursor = start
-    covered, uncovered = [], []
+    pieces = []
     for segment in segments:
         segment_start, segment_end = segment["start"], segment["end"]
         if segment_end <= start:
@@ -136,13 +142,13 @@ def _split_coverage(
             break
         _start, _end = max(segment_start, start), min(segment_end, end)
         if cursor < _start:
-            uncovered.append({"start": cursor, "end": _start})
-        covered.append({"start": _start, "end": _end})
+            pieces.append({"start": cursor, "end": _start, "path": None})
+        pieces.append({"start": _start, "end": _end, "path": segment["path"]})
         cursor = _end
     if cursor < end:
-        uncovered.append({"start": cursor, "end": end})
+        pieces.append({"start": cursor, "end": end, "path": None})
 
-    return covered, uncovered
+    return pieces
 
 
 def _read_manifest(manifest_path: str) -> dict:
