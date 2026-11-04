@@ -87,8 +87,8 @@ A tree with one level per entry of `key_params`, in order, ending in a list of s
             {
                 "start": 1768867200000000000,
                 "end": 1773100800000000000,
-                "ts_event": 1761862800000000000,
-                "path": "bar/aapl/1768867200000000000-1773100800000000000.parquet"
+                "path": "bar/aapl/1768867200000000000-1773100800000000000.parquet",
+                "ts_event": 1761862800000000000
             }
         ]
     }
@@ -142,7 +142,7 @@ Example: segment `[10, 20)` cached, request `[5, 25)`:
 ]
 ```
 
-`range_cache.py` has a `__main__` block that decorates two functions and walks through the main cases: empty cache, full hit, gaps on both sides, independent key values, independent functions, and invalid input. It writes its cache directories into the current directory's `xpectral_utils/range_cache/`, so run it from a scratch directory (with the repository on `PYTHONPATH`) rather than from the repository root.
+`range_cache.py` has a `__main__` block that decorates a function and walks through the main cases: empty cache, full hit, gaps on both sides, independent key values, and invalid input. It writes its cache directories into the current directory's `xpectral_utils/range_cache/`, so run it from a scratch directory (with the repository on `PYTHONPATH`) rather than from the repository root.
 
 ## Current state and known limitations
 

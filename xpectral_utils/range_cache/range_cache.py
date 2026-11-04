@@ -174,7 +174,7 @@ def _write_manifest(manifest_path: str, manifest: dict) -> None:
     fd, tmp_path = tempfile.mkstemp(dir=manifest_dir, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(manifest, f, indent=4, sort_keys=True)
+            json.dump(manifest, f, indent=4, sort_keys=False)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, manifest_path)
@@ -203,6 +203,7 @@ def _write_parquet(func_dir: str, segment_path: str) -> None:
 # 4. Check what happens when I request a single date.
 
 if __name__ == "__main__":
+    import polars as pl
 
     def ns(year: int, month: int, day: int) -> int:
         """UTC midnight of a calendar date as UNIX nanoseconds."""
@@ -210,10 +211,18 @@ if __name__ == "__main__":
         return int(datetime.datetime(year, month, day, tzinfo=utc).timestamp()) * 10**9
 
     @range_cache(start_param="start", end_param="end", key_params=["kind", "symbol"])
-    def fetch(kind: str, symbol: str, start: int, end: int): ...
-
-    @range_cache(start_param="start", end_param="end", key_params=["symbol"])
-    def fetch_other(symbol: str, start: int, end: int): ...
+    def fetch(kind: str, symbol: str, start: int, end: int) -> pl.DataFrame:
+        """Mock provider: one row per UTC day in ``[start, end)``."""
+        day = 86_400 * 10**9
+        ts = list(range(start, end, day))
+        return pl.DataFrame(
+            {
+                "ts": ts,
+                "kind": [kind] * len(ts),
+                "symbol": [symbol] * len(ts),
+                "close": [100.0 + (t // day) % 10 for t in ts],
+            }
+        )
 
     # Empty cache: everything is uncovered.
     print(fetch("bar", "aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
@@ -223,8 +232,6 @@ if __name__ == "__main__":
     print(fetch("bar", "aapl", ns(2026, 1, 1), ns(2026, 4, 1)))
     # Same symbol under a different kind is cached independently.
     print(fetch("range", "aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
-    # A different function has its own manifest, so nothing is cached yet.
-    print(fetch_other("aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
     # Invalid: start >= end.
     try:
         fetch("bar", "aapl", ns(2026, 3, 10), ns(2026, 3, 10))
