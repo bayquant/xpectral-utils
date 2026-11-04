@@ -87,7 +87,10 @@ def range_cache(
                     tables.append(_read_parquet(func_dir, piece["path"]))
                     continue
 
-                # fetch new data
+                arguments[start_param] = piece["start"]
+                arguments[end_param] = piece["end"]
+                data = func(*bound.args, **bound.kwargs)
+                print(data)
 
                 # convert to the standard format
 
