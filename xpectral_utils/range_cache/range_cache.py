@@ -78,8 +78,15 @@ def range_cache(
             segments = tree.setdefault(key_values[-1], [])
 
             covered, uncovered = _split_coverage(segments, start, end)
+
+            # get cached data
+
             ts_event = time.time_ns()
             for gap in uncovered:
+                # fetch new data
+
+                # convert to the standard format
+
                 segment_path = os.path.join(
                     *key_values, f"{gap['start']}-{gap['end']}.parquet"
                 )
@@ -92,9 +99,16 @@ def range_cache(
                         "ts_event": ts_event,
                     }
                 )
-            _write_manifest(manifest_path, manifest)
 
-            return covered, uncovered
+            # Save before combining: combining can fail, and the fetched
+            # segments are already on disk. Skip when nothing was added.
+            if uncovered:
+                _write_manifest(manifest_path, manifest)
+
+            # combine data, then trim to [start, end) since cached segments
+            # can extend past the request
+
+            # return combined data
 
         return wrapper
 
