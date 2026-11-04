@@ -84,6 +84,7 @@ def range_cache(
             for piece in pieces:
                 if piece["path"] is not None:
                     # get cached data
+
                     continue
 
                 # fetch new data
