@@ -79,12 +79,12 @@ def range_cache(
 
             pieces = _split_range(segments, start, end)
 
+            tables = []
             ts_event = time.time_ns()
             updated = False
             for piece in pieces:
                 if piece["path"] is not None:
-                    # get cached data
-
+                    tables.append(_read_parquet(func_dir, piece["path"]))
                     continue
 
                 # fetch new data
@@ -207,6 +207,7 @@ def _write_parquet(func_dir: str, segment_path: str) -> None:
 # 2. Save paths support.
 # 3. Sha support.
 # 4. Check what happens when I request a single date.
+# 5. Make sure paths work for both Mac and Windows without damaging atomic write for _write_manifest
 
 if __name__ == "__main__":
     import polars as pl
