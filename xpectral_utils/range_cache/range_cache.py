@@ -90,14 +90,19 @@ def range_cache(
                 arguments[start_param] = piece["start"]
                 arguments[end_param] = piece["end"]
                 data = func(*bound.args, **bound.kwargs)
-                print(data)
 
-                # convert to the standard format
+                # convert to the standard format (pyarrow table). Be aware:
+                # - func must always return the same type: pandas and polars
+                #   give different string types, which cannot be concatenated.
+                # - polars Categorical columns cannot be written to parquet.
+                # - an empty result has null-typed columns and will not
+                #   concatenate with real data.
+                table = pa.table(data)
 
                 segment_path = os.path.join(
                     *key_values, f"{piece['start']}-{piece['end']}.parquet"
                 )
-                _write_parquet(func_dir, segment_path)
+                _write_parquet(func_dir, segment_path, table)
                 segments.append(
                     {
                         "start": piece["start"],
@@ -192,12 +197,12 @@ def _write_manifest(manifest_path: str, manifest: dict) -> None:
         raise
 
 
-def _write_parquet(func_dir: str, segment_path: str) -> None:
-    """Write an empty parquet file at ``segment_path``, relative to ``func_dir``."""
+def _write_parquet(func_dir: str, segment_path: str, table: pa.Table) -> None:
+    """Write ``table`` at ``segment_path``, relative to ``func_dir``."""
 
     full_path = os.path.join(func_dir, segment_path)
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    pq.write_table(pa.table({}), full_path)
+    pq.write_table(table, full_path)
 
 
 # Tests:
