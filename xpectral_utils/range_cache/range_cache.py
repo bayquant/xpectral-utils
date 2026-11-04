@@ -125,6 +125,22 @@ def range_cache(
 # -----------------------------------------------------------------------------
 
 
+def _read_manifest(manifest_path: str) -> dict:
+    """Load the manifest, or an empty one if it does not exist yet."""
+
+    try:
+        with open(manifest_path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+def _read_parquet(func_dir: str, segment_path: str) -> pa.Table:
+    """Read the parquet file at ``segment_path``, relative to ``func_dir``."""
+
+    return pq.read_table(os.path.join(func_dir, segment_path))
+
+
 def _split_range(segments: list[dict], start: int, end: int) -> list[dict]:
     """Tile ``[start, end)`` with ordered cached and missing pieces.
 
@@ -150,16 +166,6 @@ def _split_range(segments: list[dict], start: int, end: int) -> list[dict]:
         pieces.append({"start": cursor, "end": end, "path": None})
 
     return pieces
-
-
-def _read_manifest(manifest_path: str) -> dict:
-    """Load the manifest, or an empty one if it does not exist yet."""
-
-    try:
-        with open(manifest_path) as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
 
 
 def _write_manifest(manifest_path: str, manifest: dict) -> None:
