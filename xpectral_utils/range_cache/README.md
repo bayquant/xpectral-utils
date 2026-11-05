@@ -2,7 +2,7 @@
 
 A decorator factory that gives a function an on-disk range cache. For a requested time range, it works out which parts are already cached and which parts must be fetched, so only the gaps are fetched.
 
-The cache is a manifest plus one data file per cached segment. The manifest is a JSON index of which time ranges have been fetched for each combination of key values. Each decorated function gets its own directory and manifest, so different functions never collide.
+The cache is a manifest plus one data file per cached segment. The manifest is a JSON index of which time ranges have been fetched for each combination of key values. Each decorated function gets its own directory and manifest, so different functions never collide. The data is a polars `DataFrame`, stored as parquet.
 
 ## Theory
 
@@ -41,11 +41,11 @@ The sweep assumes the stored segments are disjoint. If two segments overlapped, 
 ## Architecture
 
 ```
-@range_cache(start_param=..., end_param=..., key_params=[...])
+@range_cache(start_param=..., end_param=..., key_params=[...], time_column=...)
 def fetch(...): ...
 ```
 
-`range_cache` is a decorator factory: it returns a decorator configured with the three settings, and the decorator returns the wrapper that replaces the function.
+`range_cache` is a decorator factory: it returns a decorator configured with the four settings, and the decorator returns the wrapper that replaces the function.
 
 ```
 at decoration time (once)
@@ -60,11 +60,14 @@ on every call to the wrapper
   4. load the manifest and walk its tree down to the key_values (created empty if absent)
   5. _split_range(segments, start, end) -> pieces
   6. for each piece:
-       cached  -> get the cached data              (not implemented yet)
-       missing -> fetch it and record the segment  (fetch not implemented yet)
+       cached  -> read its parquet file and trim it to the piece
+       missing -> call the function for the piece, trim the result to the piece,
+                  write it as a parquet file and record the segment
   7. _write_manifest() if any segment was added (atomic)
-  8. combine the data and return it               (not implemented yet)
+  8. pl.concat() the pieces, already in time order, and return the DataFrame
 ```
+
+Trimming keeps the rows whose `time_column` is in the piece's `[start, end)`. A cached segment file can extend past the request, and a provider can return rows outside the gap it was asked for (for example an inclusive end bar), so both are trimmed. The time column can be int64 nanoseconds or a `Datetime` of any unit and time zone.
 
 ### Files
 
@@ -99,7 +102,7 @@ A tree with one level per entry of `key_params`, in order, ending in a list of s
 |---|---|
 | `start`, `end` | Half-open range `[start, end)` in UNIX nanoseconds (UTC). |
 | `ts_event` | Wall-clock time (ns) when the segment was recorded. |
-| `path` | Location of the segment's data file, relative to the function's directory. One file per segment, named `{key values}/{start}-{end}.parquet`. Currently an empty parquet written with pyarrow. |
+| `path` | Location of the segment's data file, relative to the function's directory. One file per segment, named `{key values}/{start}-{end}.parquet`. A gap with no data is saved as an empty parquet file, so it is not fetched again. |
 
 A content hash (`sha`) may be added later for integrity checks or provider-revision detection.
 
@@ -114,11 +117,18 @@ The manifest is saved right after the segments are recorded and before the data 
 ## Usage
 
 ```python
+import polars as pl
+
 from xpectral_utils.range_cache.range_cache import range_cache
 
 
-@range_cache(start_param="start", end_param="end", key_params=["kind", "symbol"])
-def fetch(kind: str, symbol: str, start: int, end: int): ...
+@range_cache(
+    start_param="start",
+    end_param="end",
+    key_params=["kind", "symbol"],
+    time_column="ts",
+)
+def fetch(kind: str, symbol: str, start: int, end: int) -> pl.DataFrame: ...
 
 
 fetch("bar", "aapl", start_ns, end_ns)
@@ -129,8 +139,18 @@ fetch("bar", "aapl", start_ns, end_ns)
 | `start_param` | Name of the parameter holding the range start (UNIX ns, UTC). |
 | `end_param` | Name of the parameter holding the exclusive range end. |
 | `key_params` | Names of the parameters whose values form the manifest tree, in order. |
+| `time_column` | Name of the column of the returned DataFrame that holds each row's time. Used to trim rows to the requested range. |
 
-These are parameter names, not values. A function whose parameters are called `begin` and `finish` would use `start_param="begin"` and `end_param="finish"`. Decorating a function that lacks one of the named parameters raises `TypeError` immediately.
+The first three are parameter names, not values. A function whose parameters are called `begin` and `finish` would use `start_param="begin"` and `end_param="finish"`. Decorating a function that lacks one of the named parameters raises `TypeError` immediately.
+
+### Data contract
+
+The decorated function must return a polars `DataFrame` with a `time_column`. The cache returns a `DataFrame` with the same columns.
+
+- **Column types must stay the same between calls.** Types that polars infers from the values can change: `[100, 101]` is `Int64` and `[100.0, 101.0]` is `Float64`, and a day with no data gives `Null` columns. Pieces with different types cannot be concatenated, and a segment already saved stays in the cache. Build the frame with an explicit schema, for example `pl.DataFrame(rows, schema={"ts": pl.Int64, "close": pl.Float64})`.
+- **Column order must stay the same too.** `pl.concat` raises a `ShapeError` otherwise.
+- **An empty result is fine.** Empty frames, including `Null`-typed ones, are cached and combine with real data.
+- **`Object` columns cannot be stored** in parquet.
 
 Example: segment `[10, 20)` cached, request `[5, 25)`:
 
@@ -142,14 +162,15 @@ Example: segment `[10, 20)` cached, request `[5, 25)`:
 ]
 ```
 
-`range_cache.py` has a `__main__` block that decorates a function and walks through the main cases: empty cache, full hit, gaps on both sides, independent key values, and invalid input. It writes its cache directories into the current directory's `xpectral_utils/range_cache/`, so run it from a scratch directory (with the repository on `PYTHONPATH`) rather than from the repository root.
+`range_cache.py` has a `__main__` block that decorates a mock provider returning polars data and walks through the main cases: empty cache, full hit, gaps on both sides, and independent key values. It writes its cache directories into the current directory's `xpectral_utils/range_cache/`, so run it from a scratch directory (with the repository on `PYTHONPATH`) rather than from the repository root.
 
 ## Current state and known limitations
 
 The cache is a work in progress. Things to know before relying on it:
 
-- **The decorated function is never called.** Missing pieces are recorded in the manifest as if they had been fetched, with an empty parquet file at `path`. No data is fetched, read, combined or returned yet: the wrapper returns `None`.
-- **Planned data step.** Cached and fetched data will both be converted to one standard format (a `pyarrow.Table`) so they can be concatenated. The combined result will be trimmed to `[start, end)`, because a cached segment can extend past the request.
+- **No schema check.** The column types and order a provider returns are not validated (see [Data contract](#data-contract)). A mismatch fails when the pieces are combined, after the new segment is already saved. A declared schema, checked before each segment is written, is planned.
+- **Cached "nothing found" is final.** An empty gap is saved as an empty segment, so data a provider adds later for that range is not picked up.
+- **Polars only.** The function must return a polars `DataFrame`. Other types (pandas, Arrow tables) are not converted.
 - **No segment merging.** Adjacent segments are never coalesced, so the list grows with many small entries. Consolidation is planned as a separate step after the manifest is saved.
 - **No concurrency control.** The read-modify-write on the manifest is atomic only for the final replace. Two processes calling at once can both read the same state, and the last writer wins, losing the other's segments.
 - **Relative cache root.** `_RANGE_CACHE_DIR` is relative to the current working directory, so the cache lands in different places depending on where you run from.
@@ -162,4 +183,7 @@ The cache is a work in progress. Things to know before relying on it:
 - `start >= end` raises `InvalidRangeError`.
 - `None` for `start` or `end`.
 - Decorating a function with a wrong parameter name raises `TypeError`.
+- Cache miss, hit and partial hit call the function only for the gaps.
+- Rows outside a requested gap are trimmed.
+- Empty gaps are cached and not fetched again, and combine with real data.
 - Merging of adjacent segments in the manifest.

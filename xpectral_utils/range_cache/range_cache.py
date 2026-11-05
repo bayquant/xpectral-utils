@@ -16,9 +16,7 @@ from collections.abc import Callable
 from collections.abc import Sequence
 
 # Third-party imports
-import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
+import polars as pl
 
 # First-party imports
 from xpectral_utils.range_cache.exceptions import (
@@ -47,7 +45,7 @@ def range_cache(
     bounds in UNIX nanoseconds (UTC), and ``key_params`` names the parameters
     whose values form the manifest tree, in order. ``time_column`` names the
     column of the returned data that holds each row's time, used to trim rows
-    to the requested range. The decorated function must return a pyarrow table.
+    to the requested range. The decorated function must return a polars DataFrame.
     Each decorated function gets its own directory and manifest, so different
     functions never collide.
     """
@@ -83,40 +81,41 @@ def range_cache(
 
             pieces = _split_range(segments, start, end)
 
-            tables = []
+            frames = []
             ts_event = time.time_ns()
             updated = False
             for piece in pieces:
                 if piece["path"] is not None:
                     # the segment file can extend past the piece, so trim it
-                    table = _read_parquet(func_dir, piece["path"])
-                    tables.append(
-                        _trim_table(table, time_column, piece["start"], piece["end"])
+                    df = pl.read_parquet(os.path.join(func_dir, piece["path"]))
+                    frames.append(
+                        _trim_frame(df, time_column, piece["start"], piece["end"])
                     )
                     continue
 
                 arguments[start_param] = piece["start"]
                 arguments[end_param] = piece["end"]
-                table = func(*bound.args, **bound.kwargs)
+                df = func(*bound.args, **bound.kwargs)
 
-                # func must return a pyarrow table (for polars use .to_arrow(),
-                # not pa.table(): it gives string_view, which cannot be
-                # filtered). Be aware: the column types must stay the same
-                # between gaps, or the pieces cannot be concatenated.
+                # func must return a polars DataFrame. Be aware: the column
+                # types must stay the same between gaps, or the pieces cannot
+                # be concatenated.
 
                 # the provider may return rows outside the gap (for example an
                 # inclusive end bar), so the saved file holds only the gap
-                table = _trim_table(table, time_column, piece["start"], piece["end"])
+                df = _trim_frame(df, time_column, piece["start"], piece["end"])
 
-                # An empty table is saved too, so a gap with no data (weekend,
+                # An empty frame is saved too, so a gap with no data (weekend,
                 # holiday, before a listing) is not fetched again. Note that
                 # this makes "nothing found" final: data the provider adds
                 # later for that range will not be picked up.
                 segment_path = os.path.join(
                     *key_values, f"{piece['start']}-{piece['end']}.parquet"
                 )
-                _write_parquet(func_dir, segment_path, table)
-                tables.append(table)
+                full_path = os.path.join(func_dir, segment_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                df.write_parquet(full_path)
+                frames.append(df)
                 segments.append(
                     {
                         "start": piece["start"],
@@ -132,15 +131,8 @@ def range_cache(
             if updated:
                 _write_manifest(manifest_path, manifest)
 
-            # combine data: the pieces are already trimmed and in time order.
-            # Empty pieces are skipped because they can have null-typed
-            # columns that do not concatenate with real data.
-            non_empty = [table for table in tables if table.num_rows]
-            if not non_empty:
-                return tables[0]
-
-            # return combined data
-            return pa.concat_tables(non_empty)
+            # combine data: the pieces are already trimmed and in time order
+            return pl.concat(frames)
 
         return wrapper
 
@@ -160,12 +152,6 @@ def _read_manifest(manifest_path: str) -> dict:
             return json.load(f)
     except FileNotFoundError:
         return {}
-
-
-def _read_parquet(func_dir: str, segment_path: str) -> pa.Table:
-    """Read the parquet file at ``segment_path``, relative to ``func_dir``."""
-
-    return pq.read_table(os.path.join(func_dir, segment_path))
 
 
 def _split_range(segments: list[dict], start: int, end: int) -> list[dict]:
@@ -195,17 +181,19 @@ def _split_range(segments: list[dict], start: int, end: int) -> list[dict]:
     return pieces
 
 
-def _trim_table(table: pa.Table, time_column: str, start: int, end: int) -> pa.Table:
-    """Keep the rows of ``table`` whose time is in ``[start, end)``.
+def _trim_frame(
+    df: pl.DataFrame, time_column: str, start: int, end: int
+) -> pl.DataFrame:
+    """Keep the rows of ``df`` whose time is in ``[start, end)``.
 
     ``start`` and ``end`` are UNIX nanoseconds. The column can be int64
-    nanoseconds or a timestamp of any unit.
+    nanoseconds or a datetime of any unit.
     """
 
-    times = table[time_column]
-    if pa.types.is_timestamp(times.type):
-        times = times.cast(pa.timestamp("ns", tz=times.type.tz)).cast(pa.int64())
-    return table.filter(pc.and_(pc.greater_equal(times, start), pc.less(times, end)))
+    times = pl.col(time_column)
+    if isinstance(df.schema[time_column], pl.Datetime):
+        times = times.dt.epoch("ns")
+    return df.filter((times >= start) & (times < end))
 
 
 def _write_manifest(manifest_path: str, manifest: dict) -> None:
@@ -229,14 +217,6 @@ def _write_manifest(manifest_path: str, manifest: dict) -> None:
         raise
 
 
-def _write_parquet(func_dir: str, segment_path: str, table: pa.Table) -> None:
-    """Write ``table`` at ``segment_path``, relative to ``func_dir``."""
-
-    full_path = os.path.join(func_dir, segment_path)
-    os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    pq.write_table(table, full_path)
-
-
 # Tests:
 # 1. start date is higher than end date
 # 2. start or end date is equal to None
@@ -247,10 +227,9 @@ def _write_parquet(func_dir: str, segment_path: str, table: pa.Table) -> None:
 # 2. Save paths support.
 # 3. Sha support.
 # 4. Check what happens when I request a single date.
-# 5. Make sure paths work for both Mac and Windows without damaging atomic write for _write_manifest
+# 5. Make sure paths work for both Mac and Windows without damaging atomic write for _write_manifest (don't use os.path)
 
 if __name__ == "__main__":
-    import polars as pl
 
     def ns(year: int, month: int, day: int) -> int:
         """UTC midnight of a calendar date as UNIX nanoseconds."""
@@ -263,7 +242,7 @@ if __name__ == "__main__":
         key_params=["kind", "symbol"],
         time_column="ts",
     )
-    def fetch(kind: str, symbol: str, start: int, end: int) -> pa.Table:
+    def fetch(kind: str, symbol: str, start: int, end: int) -> pl.DataFrame:
         """Mock provider: one row per UTC day in ``[start, end)``."""
         day = 86_400 * 10**9
         ts = list(range(start, end, day))
@@ -274,7 +253,7 @@ if __name__ == "__main__":
                 "symbol": [symbol] * len(ts),
                 "close": [100.0 + (t // day) % 10 for t in ts],
             }
-        ).to_arrow()
+        )
 
     # Empty cache: everything is uncovered.
     print(fetch("bar", "aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
