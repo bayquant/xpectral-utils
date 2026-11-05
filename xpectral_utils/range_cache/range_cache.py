@@ -17,6 +17,7 @@ from collections.abc import Sequence
 
 # Third-party imports
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 # First-party imports
@@ -38,14 +39,17 @@ _RANGE_CACHE_DIR = "./xpectral_utils/range_cache"
 
 
 def range_cache(
-    start_param: str, end_param: str, key_params: Sequence[str]
+    start_param: str, end_param: str, key_params: Sequence[str], time_column: str
 ) -> Callable:
     """Decorator factory: build a decorator adding an on-disk range cache.
 
     ``start_param`` and ``end_param`` name the parameters holding the range
     bounds in UNIX nanoseconds (UTC), and ``key_params`` names the parameters
-    whose values form the manifest tree, in order. Each decorated function gets
-    its own directory and manifest, so different functions never collide.
+    whose values form the manifest tree, in order. ``time_column`` names the
+    column of the returned data that holds each row's time, used to trim rows
+    to the requested range. The decorated function must return a pyarrow table.
+    Each decorated function gets its own directory and manifest, so different
+    functions never collide.
     """
 
     def decorator(func: Callable) -> Callable:
@@ -84,25 +88,35 @@ def range_cache(
             updated = False
             for piece in pieces:
                 if piece["path"] is not None:
-                    tables.append(_read_parquet(func_dir, piece["path"]))
+                    # the segment file can extend past the piece, so trim it
+                    table = _read_parquet(func_dir, piece["path"])
+                    tables.append(
+                        _trim_table(table, time_column, piece["start"], piece["end"])
+                    )
                     continue
 
                 arguments[start_param] = piece["start"]
                 arguments[end_param] = piece["end"]
-                data = func(*bound.args, **bound.kwargs)
+                table = func(*bound.args, **bound.kwargs)
 
-                # convert to the standard format (pyarrow table). Be aware:
-                # - func must always return the same type: pandas and polars
-                #   give different string types, which cannot be concatenated.
-                # - polars Categorical columns cannot be written to parquet.
-                # - an empty result has null-typed columns and will not
-                #   concatenate with real data.
-                table = pa.table(data)
+                # func must return a pyarrow table (for polars use .to_arrow(),
+                # not pa.table(): it gives string_view, which cannot be
+                # filtered). Be aware: the column types must stay the same
+                # between gaps, or the pieces cannot be concatenated.
 
+                # the provider may return rows outside the gap (for example an
+                # inclusive end bar), so the saved file holds only the gap
+                table = _trim_table(table, time_column, piece["start"], piece["end"])
+
+                # An empty table is saved too, so a gap with no data (weekend,
+                # holiday, before a listing) is not fetched again. Note that
+                # this makes "nothing found" final: data the provider adds
+                # later for that range will not be picked up.
                 segment_path = os.path.join(
                     *key_values, f"{piece['start']}-{piece['end']}.parquet"
                 )
                 _write_parquet(func_dir, segment_path, table)
+                tables.append(table)
                 segments.append(
                     {
                         "start": piece["start"],
@@ -118,10 +132,15 @@ def range_cache(
             if updated:
                 _write_manifest(manifest_path, manifest)
 
-            # combine data, then trim to [start, end) since cached segments
-            # can extend past the request
+            # combine data: the pieces are already trimmed and in time order.
+            # Empty pieces are skipped because they can have null-typed
+            # columns that do not concatenate with real data.
+            non_empty = [table for table in tables if table.num_rows]
+            if not non_empty:
+                return tables[0]
 
             # return combined data
+            return pa.concat_tables(non_empty)
 
         return wrapper
 
@@ -176,6 +195,19 @@ def _split_range(segments: list[dict], start: int, end: int) -> list[dict]:
     return pieces
 
 
+def _trim_table(table: pa.Table, time_column: str, start: int, end: int) -> pa.Table:
+    """Keep the rows of ``table`` whose time is in ``[start, end)``.
+
+    ``start`` and ``end`` are UNIX nanoseconds. The column can be int64
+    nanoseconds or a timestamp of any unit.
+    """
+
+    times = table[time_column]
+    if pa.types.is_timestamp(times.type):
+        times = times.cast(pa.timestamp("ns", tz=times.type.tz)).cast(pa.int64())
+    return table.filter(pc.and_(pc.greater_equal(times, start), pc.less(times, end)))
+
+
 def _write_manifest(manifest_path: str, manifest: dict) -> None:
     """Atomically replace the manifest so readers never see a partial file.
 
@@ -225,8 +257,13 @@ if __name__ == "__main__":
         utc = datetime.timezone.utc
         return int(datetime.datetime(year, month, day, tzinfo=utc).timestamp()) * 10**9
 
-    @range_cache(start_param="start", end_param="end", key_params=["kind", "symbol"])
-    def fetch(kind: str, symbol: str, start: int, end: int) -> pl.DataFrame:
+    @range_cache(
+        start_param="start",
+        end_param="end",
+        key_params=["kind", "symbol"],
+        time_column="ts",
+    )
+    def fetch(kind: str, symbol: str, start: int, end: int) -> pa.Table:
         """Mock provider: one row per UTC day in ``[start, end)``."""
         day = 86_400 * 10**9
         ts = list(range(start, end, day))
@@ -237,7 +274,7 @@ if __name__ == "__main__":
                 "symbol": [symbol] * len(ts),
                 "close": [100.0 + (t // day) % 10 for t in ts],
             }
-        )
+        ).to_arrow()
 
     # Empty cache: everything is uncovered.
     print(fetch("bar", "aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
@@ -247,8 +284,3 @@ if __name__ == "__main__":
     print(fetch("bar", "aapl", ns(2026, 1, 1), ns(2026, 4, 1)))
     # Same symbol under a different kind is cached independently.
     print(fetch("range", "aapl", ns(2026, 1, 20), ns(2026, 3, 10)))
-    # Invalid: start >= end.
-    try:
-        fetch("bar", "aapl", ns(2026, 3, 10), ns(2026, 3, 10))
-    except InvalidRangeError as error:
-        print("InvalidRangeError:", error)
