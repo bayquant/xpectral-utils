@@ -74,7 +74,11 @@ def range_cache(
             if start >= end:
                 raise InvalidRangeError("Start must be less than end.")
 
-            manifest = _read_manifest(manifest_path)
+            try:
+                with open(manifest_path) as f:
+                    manifest = json.load(f)
+            except FileNotFoundError:
+                manifest = {}
 
             tree = manifest
             for part in key_values[:-1]:
@@ -88,7 +92,6 @@ def range_cache(
             updated = False
             for piece in pieces:
                 if piece["path"] is not None:
-                    # the segment file can extend past the piece, so trim it
                     df = pl.read_parquet(os.path.join(func_dir, piece["path"]))
                     frames.append(
                         _trim_frame(df, time_column, piece["start"], piece["end"])
@@ -99,24 +102,16 @@ def range_cache(
                 arguments[end_param] = piece["end"]
                 df = func(*bound.args, **bound.kwargs)
 
-                # func must return a polars DataFrame or LazyFrame. Be aware:
-                # the column types must stay the same between gaps, or the
-                # pieces cannot be concatenated.
+                # column types must stay the same between gaps
                 if isinstance(df, pl.LazyFrame):
                     df = df.collect()
 
-                # the provider may return rows outside the gap (for example an
-                # inclusive end bar), so the saved file holds only the gap
+                # drop rows outside the gap (e.g. an inclusive end bar)
                 df = _trim_frame(df, time_column, piece["start"], piece["end"])
 
-                # the pieces are joined in order, so each one must be sorted;
-                # maintain_order keeps the provider's order for equal times
                 df = df.sort(time_column, maintain_order=True)
 
-                # An empty frame is saved too, so a gap with no data (weekend,
-                # holiday, before a listing) is not fetched again. Note that
-                # this makes "nothing found" final: data the provider adds
-                # later for that range will not be picked up.
+                # save empty frames too, so a gap with no data is not refetched
                 segment_path = os.path.join(
                     *key_values, f"{piece['start']}-{piece['end']}.parquet"
                 )
@@ -134,12 +129,9 @@ def range_cache(
                 )
                 updated = True
 
-            # Save before combining: combining can fail, and the fetched
-            # segments are already on disk. Skip when nothing was added.
             if updated:
                 _write_manifest(manifest_path, manifest)
 
-            # combine data: the pieces are already trimmed and in time order
             return pl.concat(frames)
 
         return wrapper
@@ -150,16 +142,6 @@ def range_cache(
 # -----------------------------------------------------------------------------
 # Private API
 # -----------------------------------------------------------------------------
-
-
-def _read_manifest(manifest_path: str) -> dict:
-    """Load the manifest, or an empty one if it does not exist yet."""
-
-    try:
-        with open(manifest_path) as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
 
 
 def _split_range(segments: list[dict], start: int, end: int) -> list[dict]:
