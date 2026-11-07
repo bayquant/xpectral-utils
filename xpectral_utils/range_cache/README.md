@@ -178,7 +178,7 @@ The cache is a work in progress. Things to know before relying on it:
 - **Fixed cache root.** The root is `DEFAULT_CACHE_DIR` and cannot be changed per call or by an environment variable yet.
 - **Key values become folder names.** They are converted with `str()`, so a value containing a path separator would break the layout.
 - **Function directory names.** The directory is `<module>.<qualname>`. A script run directly has the module `__main__`, and a nested function includes `<locals>` in its name.
-- **No logging** of cache hits and misses yet (listed in the file's TODO).
+- **Log ranges are raw nanoseconds.** The hit and miss log lines show `start` and `end` as UNIX nanosecond integers, not dates.
 
 ## Planned tests
 

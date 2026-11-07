@@ -9,6 +9,7 @@ import datetime
 import functools
 import inspect
 import json
+import logging
 import os
 import tempfile
 import time
@@ -28,6 +29,8 @@ from xpectral_utils.range_cache.exceptions import InvalidRangeError
 # -----------------------------------------------------------------------------
 
 __all__ = ["range_cache"]
+
+logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
 # General API
@@ -92,12 +95,26 @@ def range_cache(
             updated = False
             for piece in pieces:
                 if piece["path"] is not None:
+                    logger.debug(
+                        "hit: %s %s [%d, %d)",
+                        func.__qualname__,
+                        key_values,
+                        piece["start"],
+                        piece["end"],
+                    )
                     df = pl.read_parquet(os.path.join(func_dir, piece["path"]))
                     frames.append(
                         _trim_frame(df, time_column, piece["start"], piece["end"])
                     )
                     continue
 
+                logger.info(
+                    "miss, fetching: %s %s [%d, %d)",
+                    func.__qualname__,
+                    key_values,
+                    piece["start"],
+                    piece["end"],
+                )
                 arguments[start_param] = piece["start"]
                 arguments[end_param] = piece["end"]
                 df = func(*bound.args, **bound.kwargs)
@@ -213,11 +230,10 @@ def _write_manifest(manifest_path: str, manifest: dict) -> None:
 # 3. Add a test for merging segments in the manifest
 
 # TODO:
-# 1. Add logging to the range_cache function to log when a cache hit or miss occurs.
-# 2. Save paths support.
-# 3. Sha support.
-# 4. Check what happens when I request a single date.
-# 5. Make sure paths work for both Mac and Windows without damaging atomic write for _write_manifest (don't use os.path)
+# 1. Save paths support.
+# 2. Sha support.
+# 3. Check what happens when I request a single date.
+# 4. Make sure paths work for both Mac and Windows without damaging atomic write for _write_manifest (don't use os.path)
 
 if __name__ == "__main__":
 
