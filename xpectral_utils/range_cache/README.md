@@ -145,7 +145,9 @@ The first three are parameter names, not values. A function whose parameters are
 
 ### Data contract
 
-The decorated function must return a polars `DataFrame` with a `time_column`. The cache returns a `DataFrame` with the same columns.
+The decorated function must return a polars `DataFrame` or `LazyFrame` with a `time_column`. A `LazyFrame` is collected when fetched. The cache always returns an eager `DataFrame` with the same columns, sorted by `time_column`.
+
+- **Order within a time is kept.** Each fetched piece is sorted by `time_column` with a stable sort, so rows that share a timestamp stay in the order the provider returned them.
 
 - **Column types must stay the same between calls.** Types that polars infers from the values can change: `[100, 101]` is `Int64` and `[100.0, 101.0]` is `Float64`, and a day with no data gives `Null` columns. Pieces with different types cannot be concatenated, and a segment already saved stays in the cache. Build the frame with an explicit schema, for example `pl.DataFrame(rows, schema={"ts": pl.Int64, "close": pl.Float64})`.
 - **Column order must stay the same too.** `pl.concat` raises a `ShapeError` otherwise.
@@ -170,7 +172,7 @@ The cache is a work in progress. Things to know before relying on it:
 
 - **No schema check.** The column types and order a provider returns are not validated (see [Data contract](#data-contract)). A mismatch fails when the pieces are combined, after the new segment is already saved. A declared schema, checked before each segment is written, is planned.
 - **Cached "nothing found" is final.** An empty gap is saved as an empty segment, so data a provider adds later for that range is not picked up.
-- **Polars only.** The function must return a polars `DataFrame`. Other types (pandas, Arrow tables) are not converted.
+- **Polars only.** The function must return a polars `DataFrame` or `LazyFrame`. Other types (pandas, Arrow tables) are not converted.
 - **No segment merging.** Adjacent segments are never coalesced, so the list grows with many small entries. Consolidation is planned as a separate step after the manifest is saved.
 - **No concurrency control.** The read-modify-write on the manifest is atomic only for the final replace. Two processes calling at once can both read the same state, and the last writer wins, losing the other's segments.
 - **Fixed cache root.** The root is `DEFAULT_CACHE_DIR` and cannot be changed per call or by an environment variable yet.

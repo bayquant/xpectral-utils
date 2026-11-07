@@ -21,9 +21,7 @@ import polars as pl
 # First-party imports
 from xpectral_utils.config import DEFAULT_CACHE_DIR
 from xpectral_utils.range_cache.exceptions import DecoratorConfigError
-from xpectral_utils.range_cache.exceptions import (
-    InvalidRangeError,  # goes agains rules for relative imports
-)
+from xpectral_utils.range_cache.exceptions import InvalidRangeError
 
 # -----------------------------------------------------------------------------
 # Globals and constants
@@ -45,7 +43,7 @@ def range_cache(
     bounds in UNIX nanoseconds (UTC), and ``key_params`` names the parameters
     whose values form the manifest tree, in order. ``time_column`` names the
     column of the returned data that holds each row's time, used to trim rows
-    to the requested range. The decorated function must return a polars DataFrame.
+    to the requested range. The decorated function must return a polars DataFrame or LazyFrame.
     Each decorated function gets its own directory and manifest, so different
     functions never collide.
     """
@@ -101,13 +99,19 @@ def range_cache(
                 arguments[end_param] = piece["end"]
                 df = func(*bound.args, **bound.kwargs)
 
-                # func must return a polars DataFrame. Be aware: the column
-                # types must stay the same between gaps, or the pieces cannot
-                # be concatenated.
+                # func must return a polars DataFrame or LazyFrame. Be aware:
+                # the column types must stay the same between gaps, or the
+                # pieces cannot be concatenated.
+                if isinstance(df, pl.LazyFrame):
+                    df = df.collect()
 
                 # the provider may return rows outside the gap (for example an
                 # inclusive end bar), so the saved file holds only the gap
                 df = _trim_frame(df, time_column, piece["start"], piece["end"])
+
+                # the pieces are joined in order, so each one must be sorted;
+                # maintain_order keeps the provider's order for equal times
+                df = df.sort(time_column, maintain_order=True)
 
                 # An empty frame is saved too, so a gap with no data (weekend,
                 # holiday, before a listing) is not fetched again. Note that
