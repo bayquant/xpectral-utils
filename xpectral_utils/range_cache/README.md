@@ -50,7 +50,7 @@ def fetch(...): ...
 ```
 at decoration time (once)
   1. check that start_param, end_param and key_params are parameters of the function
-  2. func_dir      = <cache root>/<module>.<qualname>
+  2. func_dir      = <cache root>/range_cache/<module>.<qualname>
   3. manifest_path = func_dir/manifest.json
 
 on every call to the wrapper
@@ -71,7 +71,7 @@ Trimming keeps the rows whose `time_column` is in the piece's `[start, end)`. A 
 
 ### Files
 
-All paths are under the cache root, `_RANGE_CACHE_DIR`.
+All paths are under the cache root, `DEFAULT_CACHE_DIR` from [config.py](../config.py), which is `~/.cache/xpectral`. The range cache keeps everything in its `range_cache` subfolder.
 
 | File | Purpose |
 |---|---|
@@ -162,7 +162,7 @@ Example: segment `[10, 20)` cached, request `[5, 25)`:
 ]
 ```
 
-`range_cache.py` has a `__main__` block that decorates a mock provider returning polars data and walks through the main cases: empty cache, full hit, gaps on both sides, and independent key values. It writes its cache directories into the current directory's `xpectral_utils/range_cache/`, so run it from a scratch directory (with the repository on `PYTHONPATH`) rather than from the repository root.
+`range_cache.py` has a `__main__` block that decorates a mock provider returning polars data and walks through the main cases: empty cache, full hit, gaps on both sides, and independent key values. It writes to the same cache folder as real use, under `~/.cache/xpectral/range_cache/__main__.fetch/`, so delete that folder to start from an empty cache.
 
 ## Current state and known limitations
 
@@ -173,7 +173,7 @@ The cache is a work in progress. Things to know before relying on it:
 - **Polars only.** The function must return a polars `DataFrame`. Other types (pandas, Arrow tables) are not converted.
 - **No segment merging.** Adjacent segments are never coalesced, so the list grows with many small entries. Consolidation is planned as a separate step after the manifest is saved.
 - **No concurrency control.** The read-modify-write on the manifest is atomic only for the final replace. Two processes calling at once can both read the same state, and the last writer wins, losing the other's segments.
-- **Relative cache root.** `_RANGE_CACHE_DIR` is relative to the current working directory, so the cache lands in different places depending on where you run from.
+- **Fixed cache root.** The root is `DEFAULT_CACHE_DIR` and cannot be changed per call or by an environment variable yet.
 - **Key values become folder names.** They are converted with `str()`, so a value containing a path separator would break the layout.
 - **Function directory names.** The directory is `<module>.<qualname>`. A script run directly has the module `__main__`, and a nested function includes `<locals>` in its name.
 - **No logging** of cache hits and misses yet (listed in the file's TODO).

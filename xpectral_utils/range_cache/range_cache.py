@@ -19,6 +19,7 @@ from collections.abc import Sequence
 import polars as pl
 
 # First-party imports
+from xpectral_utils.config import DEFAULT_CACHE_DIR
 from xpectral_utils.range_cache.exceptions import DecoratorConfigError
 from xpectral_utils.range_cache.exceptions import (
     InvalidRangeError,  # goes agains rules for relative imports
@@ -29,8 +30,6 @@ from xpectral_utils.range_cache.exceptions import (
 # -----------------------------------------------------------------------------
 
 __all__ = ["range_cache"]
-
-_RANGE_CACHE_DIR = "./xpectral_utils/range_cache"
 
 # -----------------------------------------------------------------------------
 # General API
@@ -59,7 +58,9 @@ def range_cache(
                     f"{func.__qualname__} has no parameter {name!r}."
                 )
         func_dir = os.path.join(
-            _RANGE_CACHE_DIR, f"{func.__module__}.{func.__qualname__}"
+            DEFAULT_CACHE_DIR,
+            "range_cache",
+            f"{func.__module__}.{func.__qualname__}",
         )
         manifest_path = os.path.join(func_dir, "manifest.json")
 

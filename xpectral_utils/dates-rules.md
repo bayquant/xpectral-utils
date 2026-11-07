@@ -107,7 +107,7 @@ last three digits:
 
 ```python
 ts = pd.Timestamp("2024-01-02 15:00:00.123456789", tz="UTC")
-ts.value                # 1704207600123456789  (true value)
+ts.value  # 1704207600123456789  (true value)
 # via datetime math:    # 1704207600123456000  (nanoseconds lost, no error)
 ```
 
@@ -134,8 +134,8 @@ microseconds at the moment it is extracted to Python.
 
 ```python
 s = pl.Series([1704207600123456789], dtype=pl.Datetime("ns", "UTC"))
-s[0]                    # datetime(2024, 1, 2, 15, 0, 0, 123456, tzinfo=UTC)  (ns gone)
-s.dt.epoch("ns")[0]     # 1704207600123456789  (exact)
+s[0]  # datetime(2024, 1, 2, 15, 0, 0, 123456, tzinfo=UTC)  (ns gone)
+s.dt.epoch("ns")[0]  # 1704207600123456789  (exact)
 ```
 
 Nothing here can detect that, since the value arrives as a normal `datetime`.
