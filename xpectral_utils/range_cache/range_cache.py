@@ -19,6 +19,7 @@ from collections.abc import Sequence
 import polars as pl
 
 # First-party imports
+from xpectral_utils.range_cache.exceptions import DecoratorConfigError
 from xpectral_utils.range_cache.exceptions import (
     InvalidRangeError,  # goes agains rules for relative imports
 )
@@ -54,7 +55,9 @@ def range_cache(
         signature = inspect.signature(func)
         for name in (start_param, end_param, *key_params):
             if name not in signature.parameters:
-                raise TypeError(f"{func.__qualname__} has no parameter {name!r}.")
+                raise DecoratorConfigError(
+                    f"{func.__qualname__} has no parameter {name!r}."
+                )
         func_dir = os.path.join(
             _RANGE_CACHE_DIR, f"{func.__module__}.{func.__qualname__}"
         )

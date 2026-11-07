@@ -20,4 +20,8 @@ class InvalidRangeError(RangeCacheError, ValueError):
 
 
 class DecoratorConfigError(RangeCacheError, TypeError):
-    """The decorator's ``start``, ``end`` or ``key`` do not fit the signature."""
+    """A ``range_cache`` setting does not fit the decorated function.
+
+    Raised when ``start_param``, ``end_param`` or an entry of ``key_params``
+    is not a parameter of the function.
+    """

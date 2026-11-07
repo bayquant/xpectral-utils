@@ -141,7 +141,7 @@ fetch("bar", "aapl", start_ns, end_ns)
 | `key_params` | Names of the parameters whose values form the manifest tree, in order. |
 | `time_column` | Name of the column of the returned DataFrame that holds each row's time. Used to trim rows to the requested range. |
 
-The first three are parameter names, not values. A function whose parameters are called `begin` and `finish` would use `start_param="begin"` and `end_param="finish"`. Decorating a function that lacks one of the named parameters raises `TypeError` immediately.
+The first three are parameter names, not values. A function whose parameters are called `begin` and `finish` would use `start_param="begin"` and `end_param="finish"`. Decorating a function that lacks one of the named parameters raises `DecoratorConfigError` immediately.
 
 ### Data contract
 
@@ -182,7 +182,7 @@ The cache is a work in progress. Things to know before relying on it:
 
 - `start >= end` raises `InvalidRangeError`.
 - `None` for `start` or `end`.
-- Decorating a function with a wrong parameter name raises `TypeError`.
+- Decorating a function with a wrong parameter name raises `DecoratorConfigError`.
 - Cache miss, hit and partial hit call the function only for the gaps.
 - Rows outside a requested gap are trimmed.
 - Empty gaps are cached and not fetched again, and combine with real data.
